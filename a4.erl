@@ -16,7 +16,7 @@ a4() ->
         Topic = lists:nth(rand:uniform(length(Topics) - 1), Topics),
         io:fwrite("Spawning Auction with Topic: ~s~n", [Topic]),
         {spawn_link(fun () ->
-            auction(Server, Topic, 0, rand:uniform(100))
+            auction(Server, Topic)
         end), Topic}
     end, range(1, NumAuctions)),
 
@@ -30,7 +30,29 @@ a4() ->
     end, range(1, NumClients)),
 
     % TODO: spawn new Auctions and Clients
+    spawnThings(Server),
     ok.
+
+spawnThings(Server) ->
+    spawnThings(Server, 10).
+
+spawnThings(_, 0) ->
+    ok;
+spawnThings(Server, N) ->
+    timer:sleep(rand:uniform(5) * 1000),
+    NumAuctions = rand:uniform(5),
+    lists:foreach(fun (_) ->
+        spawn_link(fun () ->
+            auction(Server)
+        end)
+    end, range(1, NumAuctions)),
+    NumClients = rand:uniform(9 + rand:uniform(6)),
+    lists:foreach(fun (_) ->
+        spawn_link(fun () ->
+            client(Server)
+        end)
+    end, range(1, NumClients)),
+    spawnThings(Server, N - 1).
 
 server() ->
     receive {init, AuctionTopicPairs} ->
@@ -46,7 +68,9 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
                     IsClientMaybeInterested = lists:member(Topic, Topics),
                     if
                         IsClientMaybeInterested ->
-                            Auction ! {msg, interestedClient, {Client}}
+                            Auction ! {msg, interestedClient, {Client}};
+                        true ->
+                            ok
                     end
                 end, ClientTopicsPairs),
                 server([{Auction, Topic}|AuctionTopicPairs], ClientTopicsPairs);
@@ -72,53 +96,88 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
         end
     end.
 
-auction(Server, Topic, Deadline, MinBid) ->
+auction(Server) ->
+    Auction = self(),
+    AllTopics = topics(),
+    Topic = lists:nth(rand:uniform(length(AllTopics)), AllTopics),
+    Server ! {msg, newAuction, {Auction, Topic}},
+    auction(Server, Topic).
+
+auction(Server, Topic) ->
+    Deadline = timeInMs() + 1000 + rand:uniform(2000),
+    MinBid = rand:uniform(50),
     auction(Server, Topic, Deadline, MinBid, []).
 
 auction(Server, Topic, Deadline, MinBid, ClientBidPairs) ->
     Auction = self(),
-    % TODO: Check whether deadline has elapsed and determine the winner
-    receive {msg, MsgType, Details} ->
-        case MsgType of
-            interestedClient ->
-                {Client} = Details,
-                CurrentMinBid = lists:foldl(fun ({_, Bid}, Acc) ->
-                    max(Acc, Bid + 1)
-                end, MinBid, ClientBidPairs),
-                Client ! {msg, auctionAvailable, {Auction, Topic, CurrentMinBid}},
-                auction(Server, Topic, Deadline, MinBid, [{Client, -1}|ClientBidPairs]);
+    IsPastDeadline = timeInMs() >= Deadline,
+    if
+        IsPastDeadline ->
+            if
+                length(ClientBidPairs) == 0 ->
+                    ok;
+                length(ClientBidPairs) == 1 ->
+                    [{Winner, _}] = ClientBidPairs,
+                    Winner ! {msg, wonAuction, {Auction, -1}},
+                    ok;
+                true ->
+                    [{Winner, _}|[{_, NextHighestBid}|_]] = lists:sort(fun ({_, B1}, {_, B2}) ->
+                        B1 =< B2
+                    end, ClientBidPairs),
+                    lists:foreach(fun ({Client, _}) ->
+                        if
+                            Client == Winner ->
+                                Client ! {msg, wonAuction, {Auction, NextHighestBid}};
+                            true ->
+                                Client ! {msg, lostAuction, {Auction}}
+                        end
+                    end, ClientBidPairs),
+                    ok
+            end;
+        true ->
+            receive {msg, MsgType, Details} ->
+                case MsgType of
+                    interestedClient ->
+                        {Client} = Details,
+                        CurrentMinBid = lists:foldl(fun ({_, Bid}, Acc) ->
+                            max(Acc, Bid + 1)
+                        end, MinBid, ClientBidPairs),
+                        Client ! {msg, auctionAvailable, {Auction, Topic, CurrentMinBid}},
+                        auction(Server, Topic, Deadline, MinBid, [{Client, -1}|ClientBidPairs]);
 
-            bid ->
-                {Client, Bid} = Details,
-                CurrentMinBid = lists:foldl(fun ({_, B}, Acc) ->
-                    max(Acc, B + 1)
-                end, MinBid, ClientBidPairs),
-                if
-                    Bid >= CurrentMinBid ->
-                        lists:foreach(fun ({C, _}) ->
-                            C ! {msg, newBid, {Auction, Bid}}
-                        end, ClientBidPairs),
-                        auction(Server, Topic, Deadline, MinBid, lists:map(fun ({C, B}) ->
-                            if
-                                C == Client ->
-                                    {C, Bid};
-                                true ->
-                                    {C, B}
-                            end
-                        end, ClientBidPairs));
-                    true ->
-                        auction(Server, Topic, Deadline, MinBid, ClientBidPairs)
-                end;
+                    bid ->
+                        {Client, Bid} = Details,
+                        CurrentMinBid = lists:foldl(fun ({_, B}, Acc) ->
+                            max(Acc, B + 1)
+                        end, MinBid, ClientBidPairs),
+                        if
+                            Bid >= CurrentMinBid ->
+                                io:fwrite("Auction ~p received bid from Client ~p: ~B~n", [Auction, Client, Bid]),
+                                lists:foreach(fun ({C, _}) ->
+                                    C ! {msg, newBid, {Auction, Bid}}
+                                end, ClientBidPairs),
+                                auction(Server, Topic, Deadline, MinBid, lists:map(fun ({C, B}) ->
+                                    if
+                                        C == Client ->
+                                            {C, Bid};
+                                        true ->
+                                            {C, B}
+                                    end
+                                end, ClientBidPairs));
+                            true ->
+                                auction(Server, Topic, Deadline, MinBid, ClientBidPairs)
+                        end;
 
-            notInterested ->
-                {Client} = Details,
-                auction(Server, Topic, Deadline, MinBid, lists:filter(fun({C, _}) ->
-                    C /= Client
-                end, ClientBidPairs))
-        end
-    after
-        1000 ->
-            auction(Server, Topic, Deadline, MinBid, ClientBidPairs)
+                    notInterested ->
+                        {Client} = Details,
+                        auction(Server, Topic, Deadline, MinBid, lists:filter(fun({C, _}) ->
+                            C /= Client
+                        end, ClientBidPairs))
+                end
+            after
+                1000 ->
+                    auction(Server, Topic, Deadline, MinBid, ClientBidPairs)
+            end
     end.
 
 client(Server) ->
@@ -130,6 +189,7 @@ client(Server) ->
 
 client(Server, Topics, AuctionTopicBidTuples) ->
     Client = self(),
+    % TODO: Random loss of interest in Topics
     receive {msg, MsgType, Details} ->
         case MsgType of
             auctionAvailable ->
@@ -201,8 +261,7 @@ client(Server, Topics, AuctionTopicBidTuples) ->
     after
         1000 ->
             client(Server, Topics, AuctionTopicBidTuples)
-    end,
-    ok.
+    end.
 
 % range(Lower, Upper) creates a list of integers
 % ranging from Lower to Upper inclusive
@@ -210,6 +269,9 @@ range(N, N) ->
     [N];
 range(Lower, Upper) ->
     [Lower|range(Lower + 1, Upper)].
+
+timeInMs() ->
+    round(erlang:system_time() / 1000000).
 
 takeRandom(0, _) ->
     [];
