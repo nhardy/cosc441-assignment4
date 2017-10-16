@@ -347,70 +347,124 @@ client(Server, Topics, AuctionTopicBidTuples) ->
     % Messages are received in this form as a tuple where Details itself is a
     % tuple whose length and contents vary depending on the MsgType
     receive {msg, MsgType, Details} ->
+    % Switch on the MsgType parameter
         case MsgType of
+            % When we are informed of a new Auction
             auctionAvailable ->
+                % Grab the Details
                 {Auction, Topic, MinBid} = Details,
-                IsInterested = rand:uniform(100) =< 67,
+
+                % If it's a Topic in our list, then there is a 67% chance that we are interested
+                IsInterested = lists:member(Topic, Topics) and rand:uniform(100) =< 67,
                 if
+                    % If we are interested
                     IsInterested ->
+                        % Choose a random amount to bid at or above the current MinBid by up to 5
                         Bid = MinBid + rand:uniform(5) - 1,
+                        % Make that Bid
                         Auction ! {msg, bid, {Client, Bid}},
+                        % Recurse, adding this Auction, its Topic and our Bid to the list of AuctionTopicBidTuples
                         client(Server, Topics, [{Auction, Topic, Bid}|AuctionTopicBidTuples]);
+
+                    % Otherwise
                     true ->
+                        % Tell the Auction that we are not interested
                         Auction ! {msg, notInterested, {Client}},
+                        % Recurse, without adding the Auction to the list of AuctionTopicBidTuples
                         client(Server, Topics, AuctionTopicBidTuples)
                 end;
+
+            % When we hear about a new bid
             newBid ->
+                % Grab the details
                 {Auction, CurrentBid} = Details,
+                % Check if we are still interested, or had unsubscribed
                 WasInterested = lists:member(Auction, lists:map(fun ({A, _, _}) ->
                     A
                 end, AuctionTopicBidTuples)),
                 if
+                    % If we were still interested
                     WasInterested ->
-                        OurBid = lists:foldl(fun (B, _) ->
+                        % Get our current bid for this Auction, or -1 if we have not bid
+                        OurBid = lists:foldl(fun ({_, _, B}, _) ->
                             B
-                        end, -1, lists:filter(fun ({A, _, B}) ->
-                            (A == Auction) and (B == CurrentBid)
+                        end, -1, lists:filter(fun ({A, _, _}) ->
+                            A == Auction
                         end, AuctionTopicBidTuples)),
+                        % If we're the current highest bidder, or a 99% chance, we want to stay in the Auction
                         IsStillInterested = (OurBid == CurrentBid) or (rand:uniform(100) =< 99),
                         if
+                            % If we are still interested
                             IsStillInterested ->
-                                ShouldBid = OurBid == CurrentBid,
+                                % Check if we should bid (if OurBid is not already the CurrentBid AND a 50% chance)
+                                ShouldBid = (OurBid /= CurrentBid) and (rand:uniform(100) =< 50),
                                 if
+                                    % If we should bid
                                     ShouldBid ->
+                                        % NewBid will be the CurrentBid plus a random numner, 1 to 5
                                         NewBid = CurrentBid + rand:uniform(5),
+                                        % Inform the Auction of the NewBid
                                         Auction ! {msg, bid, {Client, NewBid}},
+
+                                        % Update the list of AuctionTopicBidTuples, setting the relevant tuples Bid to the NewBid
                                         client(Server, Topics, lists:map(fun ({A, T, B}) ->
                                             if
+                                                % If the Auction in the list is the current Auction
                                                 A == Auction ->
+                                                    % Update the Bid
                                                     {A, T, NewBid};
+
+                                                % Otherwise
                                                 true ->
+                                                    % Leave the tuple as-is
                                                     {A, T, B}
                                             end
                                         end, AuctionTopicBidTuples));
+
+                                    % Otherwise
                                     true ->
+                                        % We're not bidding, so just loop around
                                         client(Server, Topics, AuctionTopicBidTuples)
                                 end;
+
+                            % Otherwise
                             true ->
+                                % Let the Auction know we're no longer interested
+                                Auction ! {msg, notInterested, {Client}},
+
+                                % Remove the Auction from our list of AuctionTopicBidTuples
                                 client(Server, Topics, lists:filter(fun ({A, _, _}) ->
+                                    % Keep the tuple if it is not the Auction we're looking for
                                     A /= Auction
                                 end, AuctionTopicBidTuples))
                         end;
+
+                    % Otherwise
                     true ->
-                        client(Server, Topics, lists:filter(fun ({A, _, _}) ->
-                            A /= Auction
-                        end, AuctionTopicBidTuples))
+                        % We've unsubscribed already, but the Auction probably hasn't processed that yet
+                        % so we can just ignore this message and continue looping
+                        client(Server, Topics, AuctionTopicBidTuples)
                 end;
+
+            % When we've won an Auction
             wonAuction ->
+                % Grab the Details
                 {Auction, NextHighestBid} = Details,
                 io:fwrite("Client ~p won Auction ~p where the next highest bid was ~B~n", [Client, Auction, NextHighestBid]),
+                % Remove that Auction from our list
                 client(Server, Topics, lists:filter(fun ({A, _, _}) ->
+                    % Keep the tuple if it is not the Auction we're looking for
                     A /= Auction
                 end, AuctionTopicBidTuples));
+
+            % When we've lost an Auction
             lostAuction ->
+                % Grab the details
                 {Auction} = Details,
                 io:fwrite("Client ~p lost Auction ~p~n", [Client, Auction]),
+                % Remove that Auction from our list
                 client(Server, Topics, lists:filter(fun ({A, _, _}) ->
+                    % Keep the tuple if it is not the Auction we're looking for
                     A /= Auction
                 end, AuctionTopicBidTuples))
         end
