@@ -13,14 +13,17 @@ a4() ->
     Self = self(),
 
     % Start the 'Server'
+    io:fwrite("Starting the Server~n", []),
     spawn_link(fun() ->
         server(Self)
     end),
 
     % Wait until the Server has registered with the Erlang process registry
     receive {registered} ->
+        io:fwrite("Main process has been informed that the Server has registered~n", []),
         % We will spawn a random number of Auctions between 1 and 5
         NumAuctions = rand:uniform(5),
+        io:fwrite("Spawning ~B initial Auctions~n", [NumAuctions]),
         % Create a range from 1 to NumAuctions and map over this, creating a
         % list of {Auction, Topic} tuples
         AuctionTopicPairs = lists:map(fun (_) ->
@@ -30,16 +33,17 @@ a4() ->
             Auction = spawn_link(fun () ->
                 auction(Topic)
             end),
-            io:fwrite("Spawned Auction ~p with Topic: ~s~n", [Auction, Topic]),
             {Auction, Topic}
         end, range(1, NumAuctions)),
 
         % Inform the Server of the initial list of AuctionTopicPairs so that it
         % may enter the main loop and begin listening for other communications
+        io:fwrite("Informing the Server of its initial AuctionTopicPairs~n", []),
         server ! {init, AuctionTopicPairs},
 
         % We will spawn a random number of Clients between 10 and 15
         NumClients = 9 + rand:uniform(6),
+        io:fwrite("Spawning ~B initial Clients~n", [NumClients]),
         % Create a range from 1 to NumClients and for each element, create a new
         % Client process, passing it the reference to the Server's process ID
         lists:foreach(fun (_) ->
@@ -90,11 +94,14 @@ spawnThings(N) ->
 % of AuctionTopicPairs before entering the main loop
 server(Creator) ->
     % Register self as the server
+    io:fwrite("Registering Server process with the Erlang process registry~n", []),
     register(server, self()),
-    % Tell the Creator of this process that the Server has been registered
+    % Inform the Creator of this process that the Server has been registered
+    io:fwrite("Informing the Server's creator that it is ready to receive AuctionTopicPairs~n", []),
     Creator ! {registered},
     % Receive initialisation data
     receive {init, AuctionTopicPairs} ->
+        io:fwrite("Server is entering main loop~n", []),
         server(AuctionTopicPairs, [])
     end.
 
@@ -109,6 +116,7 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
             newAuction ->
                 % Grab the details
                 {Auction, Topic} = Details,
+                io:fwrite("Server has been informed of new Auction ~p with Topic ~s~n", [Auction, Topic]),
 
                 % For each of our existing ClientTopicsPairs
                 lists:foreach(fun ({Client, Topics}) ->
@@ -118,6 +126,7 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
                         % If it does, then it might be interested
                         IsClientMaybeInterested ->
                             % So tell that Auction about this potentially interested Client
+                            io:fwrite("Server is telling Auction ~p about potentially interested Client ~p~n", [Auction, Client]),
                             Auction ! {msg, interestedClient, {Client}};
 
                         % Otherwise
@@ -134,6 +143,7 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
             subscribe ->
                 % Grab the details
                 {Client, Topics} = Details,
+                io:fwrite("Server has been informed of a new Client ~p~n", [Client]),
 
                 % For each of our existing AuctionTopicPairs
                 lists:foreach(fun ({Auction, Topic}) ->
@@ -143,6 +153,7 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
                         % If it does, then it might be interested
                         IsClientMaybeInterested ->
                             % So tell the Auction of this Client
+                            io:fwrite("Server is telling Auction ~p about potentially interested Client ~p~n", [Auction, Client]),
                             Auction ! {msg, interestedClient, {Client}};
 
                         % Otherwise
@@ -159,6 +170,7 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
             unsubscribe ->
                 % Grab the Client's process ID
                 {Client} = Details,
+                io:fwrite("Server has been informed that Client ~p wishes to unsubscribe~n", [Client]),
 
                 % Remove the Client from the list of ClientTopicsPairs by recursing
                 server(AuctionTopicPairs, lists:filter(fun ({C, _}) ->
@@ -186,11 +198,17 @@ auction() ->
 % auction(Topic) will first generate a random deadline and a MinBid,
 % before entering the main logic loop
 auction(Topic) ->
+    % This Auction is the current process
+    Auction = self(),
     % Pick a random deadline between 1 second from now and 3 seconds from now
     Deadline = timeInMs() + 1000 + rand:uniform(2000),
     % Pick and random MinBid between 1 and 50
     MinBid = rand:uniform(50),
+
+    io:fwrite("New Auction ~p with Topic ~s has been created~n", [Auction, Topic]),
+
     % Start the main logic loop
+    io:fwrite("Auction ~p is entering the main logic loop~n", [Auction]),
     auction(Topic, Deadline, MinBid, []).
 
 % auction(Topic, Deadline, MinBid, ClientBidPairs) is the main logic loop
@@ -206,6 +224,7 @@ auction(Topic, Deadline, MinBid, ClientBidPairs) ->
             if
                 % If there no Clients interested
                 length(ClientBidPairs) == 0 ->
+                    io:fwrite("Auction ~p has passed its deadline with no bids", [Auction]),
                     % Do nothing - this Auction ends
                     ok;
 
@@ -213,6 +232,8 @@ auction(Topic, Deadline, MinBid, ClientBidPairs) ->
                 length(ClientBidPairs) == 1 ->
                     % Grab the reference to the Winner's process ID
                     [{Winner, _}] = ClientBidPairs,
+
+                    io:fwrite("Auction ~p has passed its deadline with Client ~p winning (no other bids)~n", [Auction, Winner]),
                     % Inform the Winner that they won and that there was no second highest bid
                     Winner ! {msg, wonAuction, {Auction, -1}},
                     % This Auction ends
@@ -225,6 +246,7 @@ auction(Topic, Deadline, MinBid, ClientBidPairs) ->
                     [{Winner, _}|[{_, NextHighestBid}|_]] = lists:sort(fun ({_, B1}, {_, B2}) ->
                         B1 =< B2
                     end, ClientBidPairs),
+                    io:fwrite("Auction ~p has passed its deadline with Client ~p winning and ~B as the next highest bid~n", [Auction, Winner, NextHighestBid]),
 
                     % For each of the Clients that were still interested
                     lists:foreach(fun ({Client, _}) ->
@@ -256,6 +278,7 @@ auction(Topic, Deadline, MinBid, ClientBidPairs) ->
                     interestedClient ->
                         % Grab the Client's process ID
                         {Client} = Details,
+                        io:fwrite("Auction ~p has been informed of a new potentially interested Client ~p~n", [Auction, Client]),
 
                         % Calculate the CurrentMinBid by folding over the list of
                         % ClientBidPairs and finding the maximum of all (Bids + 1)
@@ -266,6 +289,7 @@ auction(Topic, Deadline, MinBid, ClientBidPairs) ->
 
                         % Tell the potentially interested Client about this Auction,
                         % what its Topic is, and the CurrentMinBid
+                        io:fwrite("Auction ~p is now informing Client ~p about itself~n", [Auction, Client]),
                         Client ! {msg, auctionAvailable, {Auction, Topic, CurrentMinBid}},
 
                         % Add this Client with a non-bid (-1) to our list of ClientBidPairs by recursing
@@ -286,7 +310,7 @@ auction(Topic, Deadline, MinBid, ClientBidPairs) ->
                         if
                             % If the incoming Bid is greater than or equal to the CurrentMinBid
                             Bid >= CurrentMinBid ->
-                                io:fwrite("Auction ~p received bid from Client ~p: ~B~n", [Auction, Client, Bid]),
+                                io:fwrite("Auction ~p received a succesful Bid from Client ~p: ~B~n", [Auction, Client, Bid]),
 
                                 % The Bid was successful, so for each Client
                                 lists:foreach(fun ({C, _}) ->
@@ -312,6 +336,7 @@ auction(Topic, Deadline, MinBid, ClientBidPairs) ->
                             % Otherwise
                             true ->
                                 % The Bid doesn't count, so just loop
+                                io:fwrite("Auction ~p received an unsuccesful Bid from Client ~p: ~B~n", [Auction, Client, Bid]),
                                 auction(Topic, Deadline, MinBid, ClientBidPairs)
                         end;
 
@@ -319,6 +344,8 @@ auction(Topic, Deadline, MinBid, ClientBidPairs) ->
                     notInterested ->
                         % Grab the Client's process ID
                         {Client} = Details,
+                        io:fwrite("Auction ~p has been informed that Client ~p wishes to unsubscribe~n", [Auction, Client]),
+
                         % Recurse, filtering the Client's entry from the list of ClientBidPairs
                         auction(Topic, Deadline, MinBid, lists:filter(fun({C, _}) ->
                             % Keep the ClientBidPair if this Client is not the Client
@@ -343,6 +370,7 @@ client() ->
     % Pick a random selection of Topics
     Topics = takeRandom(rand:uniform(length(AllTopics)), AllTopics),
     % Let the Server know about this Client and which Topics it is interested in
+    io:fwrite("New Client ~p is telling the Server about itself~n", [Client]),
     server ! {msg, subscribe, {Client, Topics}},
     % Start the main loop
     client(Topics, []).
@@ -363,6 +391,7 @@ client(Topics, AuctionTopicBidTuples) ->
             auctionAvailable ->
                 % Grab the Details
                 {Auction, Topic, MinBid} = Details,
+                io:fwrite("Client ~p has been told about Auction ~p with Topic ~s and MinBid ~B~n", [Client, Auction, Topic, MinBid]),
 
                 % If it's a Topic in our list, then there is a 67% chance that we are interested
                 IsInterested = lists:member(Topic, Topics) and (rand:uniform(100) =< 67),
@@ -372,6 +401,7 @@ client(Topics, AuctionTopicBidTuples) ->
                         % Choose a random amount to bid at or above the current MinBid by up to 5
                         Bid = MinBid + rand:uniform(5) - 1,
                         % Make that Bid
+                        io:fwrite("Client ~p is making Bid in Auction ~p: ~B~n", [Client, Auction, Bid]),
                         Auction ! {msg, bid, {Client, Bid}},
                         % Recurse, adding this Auction, its Topic and our Bid to the list of AuctionTopicBidTuples
                         client(Topics, [{Auction, Topic, Bid}|AuctionTopicBidTuples]);
@@ -379,6 +409,7 @@ client(Topics, AuctionTopicBidTuples) ->
                     % Otherwise
                     true ->
                         % Tell the Auction that we are not interested
+                        io:fwrite("Client ~p is telling Auction ~p that it is not interested~n", [Client, Auction]),
                         Auction ! {msg, notInterested, {Client}},
                         % Recurse, without adding the Auction to the list of AuctionTopicBidTuples
                         client(Topics, AuctionTopicBidTuples)
