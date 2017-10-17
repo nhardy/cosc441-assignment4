@@ -342,7 +342,7 @@ client(Server, Topics, AuctionTopicBidTuples) ->
     % Keep a reference to the Client's process
     Client = self(),
 
-    % TODO: Random loss of interest in Topics
+    % TODO: simulate random loss of interest in Topics
 
     % Messages are received in this form as a tuple where Details itself is a
     % tuple whose length and contents vary depending on the MsgType
@@ -469,24 +469,31 @@ client(Server, Topics, AuctionTopicBidTuples) ->
                 end, AuctionTopicBidTuples))
         end
     after
+        % If we don't receive any new messages, we still want to simulate the random
+        % loss of interest in Topics, so after 1 second with no messages, recurse
         1000 ->
             client(Server, Topics, AuctionTopicBidTuples)
     end.
 
-% range(Lower, Upper) creates a list of integers
-% ranging from Lower to Upper inclusive
+% range(Lower, Upper) creates a list of integers ranging from Lower to Upper inclusive
 range(N, N) ->
     [N];
 range(Lower, Upper) ->
     [Lower|range(Lower + 1, Upper)].
 
+% timeInMs() gets the system time in milliseconds
 timeInMs() ->
     round(erlang:system_time() / 1000000).
 
+% takeRandom(N, L) will try to pick N random elements from L
 takeRandom(0, _) ->
+    % When we've reached the number of required elements, don't add more
     [];
 takeRandom(_, []) ->
+    % When there are no more elements, just return an empty list
     [];
 takeRandom(N, L) ->
+    % Pick a random element from the list
     Index = rand:uniform(length(L)),
+    % Return that element, plus this function called again with N-1 and the remaining elements in the list
     [lists:nth(Index, L)|takeRandom(N - 1, lists:merge(lists:sublist(L, N - 1), lists:nthtail(Index, L)))].
