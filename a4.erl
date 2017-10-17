@@ -224,7 +224,7 @@ auction(Topic, Deadline, MinBid, ClientBidPairs) ->
             if
                 % If there no Clients interested
                 length(ClientBidPairs) == 0 ->
-                    io:fwrite("Auction ~p has passed its deadline with no bids", [Auction]),
+                    io:fwrite("Auction ~p has passed its deadline with no bids~n", [Auction]),
                     % Do nothing - this Auction ends
                     ok;
 
@@ -426,6 +426,7 @@ client(Topics, AuctionTopicBidTuples) ->
                 if
                     % If we were still interested
                     WasInterested ->
+                        io:fwrite("Client ~p was informed that there was a new Bid in Auction ~p: ~B~n", [Client, Auction, CurrentBid]),
                         % Get our current bid for this Auction, or -1 if we have not bid
                         OurBid = lists:foldl(fun ({_, _, B}, _) ->
                             B
@@ -437,6 +438,7 @@ client(Topics, AuctionTopicBidTuples) ->
                         if
                             % If we are still interested
                             IsStillInterested ->
+                                io:fwrite("Client ~p has decided it is still interested in Auction ~p~n", [Client, Auction]),
                                 % Check if we should bid (if OurBid is not already the CurrentBid AND a 50% chance)
                                 ShouldBid = (OurBid /= CurrentBid) and (rand:uniform(100) =< 50),
                                 if
@@ -445,6 +447,7 @@ client(Topics, AuctionTopicBidTuples) ->
                                         % NewBid will be the CurrentBid plus a random numner, 1 to 5
                                         NewBid = CurrentBid + rand:uniform(5),
                                         % Inform the Auction of the NewBid
+                                        io:fwrite("Client ~p is bidding in Auction ~p: ~B~n", [Client, Auction, NewBid]),
                                         Auction ! {msg, bid, {Client, NewBid}},
 
                                         % Update the list of AuctionTopicBidTuples, setting the relevant tuples Bid to the NewBid
@@ -465,12 +468,14 @@ client(Topics, AuctionTopicBidTuples) ->
                                     % Otherwise
                                     true ->
                                         % We're not bidding, so just loop around
+                                        io:fwrite("Client ~p has decided not to bid in Auction ~p~n", [Client, Auction]),
                                         client(Topics, AuctionTopicBidTuples)
                                 end;
 
                             % Otherwise
                             true ->
                                 % Let the Auction know we're no longer interested
+                                io:fwrite("Client ~p is telling Auction ~p that it is no longer interested~n", [Client, Auction]),
                                 Auction ! {msg, notInterested, {Client}},
 
                                 % Remove the Auction from our list of AuctionTopicBidTuples
