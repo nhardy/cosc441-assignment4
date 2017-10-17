@@ -9,51 +9,56 @@ topics() ->
 a4() ->
     % Create a local copy of the list of all topics
     AllTopics = topics(),
+    % Keep a reference to this process
+    Self = self(),
 
-    % Start the 'Server' and keep a reference to its process ID
-    Server = spawn_link(fun() ->
-        server()
+    % Start the 'Server'
+    spawn_link(fun() ->
+        server(Self)
     end),
 
-    % We will spawn a random number of Auctions between 1 and 5
-    NumAuctions = rand:uniform(5),
-    % Create a range from 1 to NumAuctions and map over this, creating a
-    % list of {Auction, Topic} tuples
-    AuctionTopicPairs = lists:map(fun (_) ->
-        % Pick a topic at random
-        Topic = lists:nth(rand:uniform(length(AllTopics) - 1), AllTopics),
-        % Spawn an Auction with that Topic, keeping track of its process ID
-        Auction = spawn_link(fun () ->
-            auction(Server, Topic)
-        end),
-        io:fwrite("Spawned Auction ~p with Topic: ~s~n", [Auction, Topic]),
-        {Auction, Topic}
-    end, range(1, NumAuctions)),
+    % Wait until the Server has registered with the Erlang process registry
+    receive {registered} ->
+        % We will spawn a random number of Auctions between 1 and 5
+        NumAuctions = rand:uniform(5),
+        % Create a range from 1 to NumAuctions and map over this, creating a
+        % list of {Auction, Topic} tuples
+        AuctionTopicPairs = lists:map(fun (_) ->
+            % Pick a topic at random
+            Topic = lists:nth(rand:uniform(length(AllTopics) - 1), AllTopics),
+            % Spawn an Auction with that Topic, keeping track of its process ID
+            Auction = spawn_link(fun () ->
+                auction(Topic)
+            end),
+            io:fwrite("Spawned Auction ~p with Topic: ~s~n", [Auction, Topic]),
+            {Auction, Topic}
+        end, range(1, NumAuctions)),
 
-    % Inform the Server of the initial list of AuctionTopicPairs so that it
-    % may enter the main loop and begin listening for other communications
-    Server ! {init, AuctionTopicPairs},
+        % Inform the Server of the initial list of AuctionTopicPairs so that it
+        % may enter the main loop and begin listening for other communications
+        server ! {init, AuctionTopicPairs},
 
-    % We will spawn a random number of Clients between 10 and 15
-    NumClients = 9 + rand:uniform(6),
-    % Create a range from 1 to NumClients and for each element, create a new
-    % Client process, passing it the reference to the Server's process ID
-    lists:foreach(fun (_) ->
-        spawn_link(fun () ->
-            client(Server)
-        end)
-    end, range(1, NumClients)),
+        % We will spawn a random number of Clients between 10 and 15
+        NumClients = 9 + rand:uniform(6),
+        % Create a range from 1 to NumClients and for each element, create a new
+        % Client process, passing it the reference to the Server's process ID
+        lists:foreach(fun (_) ->
+            spawn_link(fun () ->
+                client()
+            end)
+        end, range(1, NumClients)),
 
-    % Simulate the random creation of new Auctions
-    spawnThings(Server),
-    ok.
+        % Simulate the random creation of new Auctions
+        spawnThings()
+    end.
 
-% Run the spawning 10 times
-spawnThings(Server) ->
-    spawnThings(Server, 10).
-spawnThings(_, 0) ->
+% spawnThings() runs the spawnThings process 10 times
+spawnThings() ->
+    spawnThings(10).
+% spawnThings(N) will randomly spawn new Auctions N times
+spawnThings(0) ->
     ok;
-spawnThings(Server, N) ->
+spawnThings(N) ->
     % Sleep for a random number of seconds between 1 and 5
     timer:sleep(rand:uniform(5) * 1000),
 
@@ -63,7 +68,7 @@ spawnThings(Server, N) ->
     % Auction process, passing in only a reference to the Server's process ID
     lists:foreach(fun (_) ->
         spawn_link(fun () ->
-            auction(Server)
+            auction()
         end)
     end, range(1, NumAuctions)),
 
@@ -73,17 +78,22 @@ spawnThings(Server, N) ->
     % Client process, passing it the reference to the Server's process ID
     lists:foreach(fun (_) ->
         spawn_link(fun () ->
-            client(Server)
+            client()
         end)
     end, range(1, NumClients)),
 
     % Recurse, reducing the counter for the number of times
     % the function must recurse further
-    spawnThings(Server, N - 1).
+    spawnThings(N - 1).
 
 % Starts the Server logic by initially waiting to receive a list
 % of AuctionTopicPairs before entering the main loop
-server() ->
+server(Creator) ->
+    % Register self as the server
+    register(server, self()),
+    % Tell the Creator of this process that the Server has been registered
+    Creator ! {registered},
+    % Receive initialisation data
     receive {init, AuctionTopicPairs} ->
         server(AuctionTopicPairs, [])
     end.
@@ -158,10 +168,10 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
         end
     end.
 
-% auction(Server) will start the Auction logic by first choosing a random topic
+% auction() will start the Auction logic by first choosing a random topic
 % and then informing the Server before entering the next section of logic to
 % generate a Deadline and MinBid
-auction(Server) ->
+auction() ->
     % This Auction is the current process
     Auction = self(),
     % Create a local copy of the list of all topics
@@ -169,23 +179,23 @@ auction(Server) ->
     % Pick a random Topic
     Topic = lists:nth(rand:uniform(length(AllTopics)), AllTopics),
     % Let the Server know about this new Auction including its Topic
-    Server ! {msg, newAuction, {Auction, Topic}},
+    server ! {msg, newAuction, {Auction, Topic}},
     % Go to the next step
-    auction(Server, Topic).
+    auction(Topic).
 
-% auction(Server, Topic) will first generate a random deadline and a MinBid,
+% auction(Topic) will first generate a random deadline and a MinBid,
 % before entering the main logic loop
-auction(Server, Topic) ->
+auction(Topic) ->
     % Pick a random deadline between 1 second from now and 3 seconds from now
     Deadline = timeInMs() + 1000 + rand:uniform(2000),
     % Pick and random MinBid between 1 and 50
     MinBid = rand:uniform(50),
     % Start the main logic loop
-    auction(Server, Topic, Deadline, MinBid, []).
+    auction(Topic, Deadline, MinBid, []).
 
-% auction(Server, Topic, Deadline, MinBid, ClientBidPairs) is the main logic loop
+% auction(Topic, Deadline, MinBid, ClientBidPairs) is the main logic loop
 % that continually calls itself while the Auction is in progress until its completion
-auction(Server, Topic, Deadline, MinBid, ClientBidPairs) ->
+auction(Topic, Deadline, MinBid, ClientBidPairs) ->
     % Keep a reference to this Auction's process
     Auction = self(),
     % Check if we're past the Auction deadline
@@ -259,7 +269,7 @@ auction(Server, Topic, Deadline, MinBid, ClientBidPairs) ->
                         Client ! {msg, auctionAvailable, {Auction, Topic, CurrentMinBid}},
 
                         % Add this Client with a non-bid (-1) to our list of ClientBidPairs by recursing
-                        auction(Server, Topic, Deadline, MinBid, [{Client, -1}|ClientBidPairs]);
+                        auction(Topic, Deadline, MinBid, [{Client, -1}|ClientBidPairs]);
 
                     % When we receive a new bid
                     bid ->
@@ -285,7 +295,7 @@ auction(Server, Topic, Deadline, MinBid, ClientBidPairs) ->
                                 end, ClientBidPairs),
 
                                 % Recurse into the loop again, replacing the Client's current Bid with the new one
-                                auction(Server, Topic, Deadline, MinBid, lists:map(fun ({C, B}) ->
+                                auction(Topic, Deadline, MinBid, lists:map(fun ({C, B}) ->
                                     if
                                         % If this element is for the current Client
                                         C == Client ->
@@ -302,7 +312,7 @@ auction(Server, Topic, Deadline, MinBid, ClientBidPairs) ->
                             % Otherwise
                             true ->
                                 % The Bid doesn't count, so just loop
-                                auction(Server, Topic, Deadline, MinBid, ClientBidPairs)
+                                auction(Topic, Deadline, MinBid, ClientBidPairs)
                         end;
 
                     % When a Client is no-longer interested
@@ -310,7 +320,7 @@ auction(Server, Topic, Deadline, MinBid, ClientBidPairs) ->
                         % Grab the Client's process ID
                         {Client} = Details,
                         % Recurse, filtering the Client's entry from the list of ClientBidPairs
-                        auction(Server, Topic, Deadline, MinBid, lists:filter(fun({C, _}) ->
+                        auction(Topic, Deadline, MinBid, lists:filter(fun({C, _}) ->
                             % Keep the ClientBidPair if this Client is not the Client
                             % that is telling us it is no longer interested
                             C /= Client
@@ -320,12 +330,12 @@ auction(Server, Topic, Deadline, MinBid, ClientBidPairs) ->
                 % If we don't receive any new messages, we still want to check whether the deadline
                 % has passed yet or not, so after 1 second with no messages, recurse
                 1000 ->
-                    auction(Server, Topic, Deadline, MinBid, ClientBidPairs)
+                    auction(Topic, Deadline, MinBid, ClientBidPairs)
             end
     end.
 
-% client(Server) creates a new Client logic loop
-client(Server) ->
+% client() creates a new Client logic loop
+client() ->
     % Keep a reference to the current process
     Client = self(),
     % Create a local copy of the list of all topics
@@ -333,12 +343,12 @@ client(Server) ->
     % Pick a random selection of Topics
     Topics = takeRandom(rand:uniform(length(AllTopics)), AllTopics),
     % Let the Server know about this Client and which Topics it is interested in
-    Server ! {msg, subscribe, {Client, Topics}},
+    server ! {msg, subscribe, {Client, Topics}},
     % Start the main loop
-    client(Server, Topics, []).
+    client(Topics, []).
 
-% client(Server, Topics, AuctionTopicBidTuples) is the main logic loop for the Client process
-client(Server, Topics, AuctionTopicBidTuples) ->
+% client(Topics, AuctionTopicBidTuples) is the main logic loop for the Client process
+client(Topics, AuctionTopicBidTuples) ->
     % Keep a reference to the Client's process
     Client = self(),
 
@@ -355,7 +365,7 @@ client(Server, Topics, AuctionTopicBidTuples) ->
                 {Auction, Topic, MinBid} = Details,
 
                 % If it's a Topic in our list, then there is a 67% chance that we are interested
-                IsInterested = lists:member(Topic, Topics) and rand:uniform(100) =< 67,
+                IsInterested = lists:member(Topic, Topics) and (rand:uniform(100) =< 67),
                 if
                     % If we are interested
                     IsInterested ->
@@ -364,14 +374,14 @@ client(Server, Topics, AuctionTopicBidTuples) ->
                         % Make that Bid
                         Auction ! {msg, bid, {Client, Bid}},
                         % Recurse, adding this Auction, its Topic and our Bid to the list of AuctionTopicBidTuples
-                        client(Server, Topics, [{Auction, Topic, Bid}|AuctionTopicBidTuples]);
+                        client(Topics, [{Auction, Topic, Bid}|AuctionTopicBidTuples]);
 
                     % Otherwise
                     true ->
                         % Tell the Auction that we are not interested
                         Auction ! {msg, notInterested, {Client}},
                         % Recurse, without adding the Auction to the list of AuctionTopicBidTuples
-                        client(Server, Topics, AuctionTopicBidTuples)
+                        client(Topics, AuctionTopicBidTuples)
                 end;
 
             % When we hear about a new bid
@@ -407,7 +417,7 @@ client(Server, Topics, AuctionTopicBidTuples) ->
                                         Auction ! {msg, bid, {Client, NewBid}},
 
                                         % Update the list of AuctionTopicBidTuples, setting the relevant tuples Bid to the NewBid
-                                        client(Server, Topics, lists:map(fun ({A, T, B}) ->
+                                        client(Topics, lists:map(fun ({A, T, B}) ->
                                             if
                                                 % If the Auction in the list is the current Auction
                                                 A == Auction ->
@@ -424,7 +434,7 @@ client(Server, Topics, AuctionTopicBidTuples) ->
                                     % Otherwise
                                     true ->
                                         % We're not bidding, so just loop around
-                                        client(Server, Topics, AuctionTopicBidTuples)
+                                        client(Topics, AuctionTopicBidTuples)
                                 end;
 
                             % Otherwise
@@ -433,7 +443,7 @@ client(Server, Topics, AuctionTopicBidTuples) ->
                                 Auction ! {msg, notInterested, {Client}},
 
                                 % Remove the Auction from our list of AuctionTopicBidTuples
-                                client(Server, Topics, lists:filter(fun ({A, _, _}) ->
+                                client(Topics, lists:filter(fun ({A, _, _}) ->
                                     % Keep the tuple if it is not the Auction we're looking for
                                     A /= Auction
                                 end, AuctionTopicBidTuples))
@@ -443,7 +453,7 @@ client(Server, Topics, AuctionTopicBidTuples) ->
                     true ->
                         % We've unsubscribed already, but the Auction probably hasn't processed that yet
                         % so we can just ignore this message and continue looping
-                        client(Server, Topics, AuctionTopicBidTuples)
+                        client(Topics, AuctionTopicBidTuples)
                 end;
 
             % When we've won an Auction
@@ -452,7 +462,7 @@ client(Server, Topics, AuctionTopicBidTuples) ->
                 {Auction, NextHighestBid} = Details,
                 io:fwrite("Client ~p won Auction ~p where the next highest bid was ~B~n", [Client, Auction, NextHighestBid]),
                 % Remove that Auction from our list
-                client(Server, Topics, lists:filter(fun ({A, _, _}) ->
+                client(Topics, lists:filter(fun ({A, _, _}) ->
                     % Keep the tuple if it is not the Auction we're looking for
                     A /= Auction
                 end, AuctionTopicBidTuples));
@@ -463,7 +473,7 @@ client(Server, Topics, AuctionTopicBidTuples) ->
                 {Auction} = Details,
                 io:fwrite("Client ~p lost Auction ~p~n", [Client, Auction]),
                 % Remove that Auction from our list
-                client(Server, Topics, lists:filter(fun ({A, _, _}) ->
+                client(Topics, lists:filter(fun ({A, _, _}) ->
                     % Keep the tuple if it is not the Auction we're looking for
                     A /= Auction
                 end, AuctionTopicBidTuples))
@@ -472,7 +482,7 @@ client(Server, Topics, AuctionTopicBidTuples) ->
         % If we don't receive any new messages, we still want to simulate the random
         % loss of interest in Topics, so after 1 second with no messages, recurse
         1000 ->
-            client(Server, Topics, AuctionTopicBidTuples)
+            client(Topics, AuctionTopicBidTuples)
     end.
 
 % range(Lower, Upper) creates a list of integers ranging from Lower to Upper inclusive
