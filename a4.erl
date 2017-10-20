@@ -12,15 +12,15 @@ a4() ->
     % Keep a reference to this process
     Self = self(),
 
-    % Start the 'Server'
-    io:fwrite("Starting the Server~n", []),
+    % Start the 'Service'
+    io:fwrite("Starting the Service~n", []),
     spawn_link(fun() ->
-        server(Self)
+        service(Self)
     end),
 
-    % Wait until the Server has registered with the Erlang process registry
+    % Wait until the Service has registered with the Erlang process registry
     receive {registered} ->
-        io:fwrite("Main process has been informed that the Server has registered~n", []),
+        io:fwrite("Main process has been informed that the Service has registered~n", []),
         % We will spawn a random number of Auctions between 1 and 5
         NumAuctions = rand:uniform(5),
         io:fwrite("Spawning ~B initial Auctions~n", [NumAuctions]),
@@ -36,16 +36,16 @@ a4() ->
             {Auction, Topic}
         end, range(1, NumAuctions)),
 
-        % Inform the Server of the initial list of AuctionTopicPairs so that it
+        % Inform the Service of the initial list of AuctionTopicPairs so that it
         % may enter the main loop and begin listening for other communications
-        io:fwrite("Informing the Server of its initial AuctionTopicPairs~n", []),
-        server ! {init, AuctionTopicPairs},
+        io:fwrite("Informing the Service of its initial AuctionTopicPairs~n", []),
+        service ! {init, AuctionTopicPairs},
 
         % We will spawn a random number of Clients between 10 and 15
         NumClients = 9 + rand:uniform(6),
         io:fwrite("Spawning ~B initial Clients~n", [NumClients]),
         % Create a range from 1 to NumClients and for each element, create a new
-        % Client process, passing it the reference to the Server's process ID
+        % Client process, passing it the reference to the Service's process ID
         lists:foreach(fun (_) ->
             spawn_link(fun () ->
                 client()
@@ -69,7 +69,7 @@ spawnThings(N) ->
     % We will spawn between 1 and 5 new Auctions
     NumAuctions = rand:uniform(5),
     % Create a range from 1 to NumAuctions and for each element, create a new
-    % Auction process, passing in only a reference to the Server's process ID
+    % Auction process, passing in only a reference to the Service's process ID
     lists:foreach(fun (_) ->
         spawn_link(fun () ->
             auction()
@@ -79,7 +79,7 @@ spawnThings(N) ->
     % We will spawn between 10 and 15 new Clients
     NumClients = rand:uniform(9 + rand:uniform(6)),
     % Create a range from 1 to NumClients and for each element, create a new
-    % Client process, passing it the reference to the Server's process ID
+    % Client process, passing it the reference to the Service's process ID
     lists:foreach(fun (_) ->
         spawn_link(fun () ->
             client()
@@ -90,23 +90,23 @@ spawnThings(N) ->
     % the function must recurse further
     spawnThings(N - 1).
 
-% Starts the Server logic by initially waiting to receive a list
+% Starts the Service logic by initially waiting to receive a list
 % of AuctionTopicPairs before entering the main loop
-server(Creator) ->
-    % Register self as the server
-    io:fwrite("Registering Server process with the Erlang process registry~n", []),
-    register(server, self()),
-    % Inform the Creator of this process that the Server has been registered
-    io:fwrite("Informing the Server's creator that it is ready to receive AuctionTopicPairs~n", []),
+service(Creator) ->
+    % Register self as the service
+    io:fwrite("Registering Service process with the Erlang process registry~n", []),
+    register(service, self()),
+    % Inform the Creator of this process that the Service has been registered
+    io:fwrite("Informing the Service's creator that it is ready to receive AuctionTopicPairs~n", []),
     Creator ! {registered},
     % Receive initialisation data
     receive {init, AuctionTopicPairs} ->
-        io:fwrite("Server is entering main loop~n", []),
-        server(AuctionTopicPairs, [])
+        io:fwrite("Service is entering main loop~n", []),
+        service(AuctionTopicPairs, [])
     end.
 
-% Main server loop which continually calls itself after dealing with each message
-server(AuctionTopicPairs, ClientTopicsPairs) ->
+% Main service loop which continually calls itself after dealing with each message
+service(AuctionTopicPairs, ClientTopicsPairs) ->
     % Messages are received in this form as a tuple where Details itself is a
     % tuple whose length and contents vary depending on the MsgType
     receive {msg, MsgType, Details} ->
@@ -116,7 +116,7 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
             newAuction ->
                 % Grab the details
                 {Auction, Topic} = Details,
-                io:fwrite("Server has been informed of new Auction ~p with Topic ~s~n", [Auction, Topic]),
+                io:fwrite("Service has been informed of new Auction ~p with Topic ~s~n", [Auction, Topic]),
 
                 % For each of our existing ClientTopicsPairs
                 lists:foreach(fun ({Client, Topics}) ->
@@ -126,7 +126,7 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
                         % If it does, then it might be interested
                         IsClientMaybeInterested ->
                             % So tell that Auction about this potentially interested Client
-                            io:fwrite("Server is telling Auction ~p about potentially interested Client ~p~n", [Auction, Client]),
+                            io:fwrite("Service is telling Auction ~p about potentially interested Client ~p~n", [Auction, Client]),
                             Auction ! {msg, interestedClient, {Client}};
 
                         % Otherwise
@@ -137,13 +137,13 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
                 end, ClientTopicsPairs),
 
                 % Add the {Auction, Topic} pair to this list by recursing
-                server([{Auction, Topic}|AuctionTopicPairs], ClientTopicsPairs);
+                service([{Auction, Topic}|AuctionTopicPairs], ClientTopicsPairs);
 
             % When we hear about a new Client subscribing
             subscribe ->
                 % Grab the details
                 {Client, Topics} = Details,
-                io:fwrite("Server has been informed of a new Client ~p~n", [Client]),
+                io:fwrite("Service has been informed of a new Client ~p~n", [Client]),
 
                 % For each of our existing AuctionTopicPairs
                 lists:foreach(fun ({Auction, Topic}) ->
@@ -153,7 +153,7 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
                         % If it does, then it might be interested
                         IsClientMaybeInterested ->
                             % So tell the Auction of this Client
-                            io:fwrite("Server is telling Auction ~p about potentially interested Client ~p~n", [Auction, Client]),
+                            io:fwrite("Service is telling Auction ~p about potentially interested Client ~p~n", [Auction, Client]),
                             Auction ! {msg, interestedClient, {Client}};
 
                         % Otherwise
@@ -164,16 +164,16 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
                 end, AuctionTopicPairs),
 
                 % Add the {Client, Topics} pair to this list by recursing
-                server(AuctionTopicPairs, [{Client, Topics}|ClientTopicsPairs]);
+                service(AuctionTopicPairs, [{Client, Topics}|ClientTopicsPairs]);
 
             % When we hear about a Client wishing to unsubscribe
             unsubscribe ->
                 % Grab the Client's process ID
                 {Client} = Details,
-                io:fwrite("Server has been informed that Client ~p wishes to unsubscribe~n", [Client]),
+                io:fwrite("Service has been informed that Client ~p wishes to unsubscribe~n", [Client]),
 
                 % Remove the Client from the list of ClientTopicsPairs by recursing
-                server(AuctionTopicPairs, lists:filter(fun ({C, _}) ->
+                service(AuctionTopicPairs, lists:filter(fun ({C, _}) ->
                     % Keep Clients that are not the Client currently unsubscribing
                     C /= Client
                 end, ClientTopicsPairs))
@@ -181,7 +181,7 @@ server(AuctionTopicPairs, ClientTopicsPairs) ->
     end.
 
 % auction() will start the Auction logic by first choosing a random topic
-% and then informing the Server before entering the next section of logic to
+% and then informing the Service before entering the next section of logic to
 % generate a Deadline and MinBid
 auction() ->
     % This Auction is the current process
@@ -190,8 +190,8 @@ auction() ->
     AllTopics = topics(),
     % Pick a random Topic
     Topic = lists:nth(rand:uniform(length(AllTopics)), AllTopics),
-    % Let the Server know about this new Auction including its Topic
-    server ! {msg, newAuction, {Auction, Topic}},
+    % Let the Service know about this new Auction including its Topic
+    service ! {msg, newAuction, {Auction, Topic}},
     % Go to the next step
     auction(Topic).
 
@@ -369,9 +369,9 @@ client() ->
     AllTopics = topics(),
     % Pick a random selection of Topics
     Topics = takeRandom(rand:uniform(length(AllTopics)), AllTopics),
-    % Let the Server know about this Client and which Topics it is interested in
-    io:fwrite("New Client ~p is telling the Server about itself~n", [Client]),
-    server ! {msg, subscribe, {Client, Topics}},
+    % Let the Service know about this Client and which Topics it is interested in
+    io:fwrite("New Client ~p is telling the Service about itself~n", [Client]),
+    service ! {msg, subscribe, {Client, Topics}},
     % Start the main loop
     client(Topics, []).
 
